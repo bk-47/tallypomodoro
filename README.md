@@ -2,6 +2,8 @@
 
 Pomodoro timer for the menu bar, with a time log you can export.
 
+![tally](tally.png)
+
 Black on white, lower case, set in Courier Prime (bundled, SIL Open Font License, see Tally/Fonts/OFL.txt).
 
 ## Build
