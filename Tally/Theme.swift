@@ -42,13 +42,16 @@ struct ClassicWindow<Content: View>: View {
     let id: String
     @ViewBuilder var content: () -> Content
     var onClose: (() -> Void)? = nil
+    var onZoom: (() -> Void)? = nil
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
         VStack(spacing: 0) {
-            TitleBar(title: title) {
-                if let onClose { onClose() } else { dismissWindow(id: id) }
-            }
+            TitleBar(
+                title: title,
+                onClose: { if let onClose { onClose() } else { dismissWindow(id: id) } },
+                onZoom: onZoom
+            )
             content()
         }
         .background(Theme.paper)
@@ -69,12 +72,17 @@ struct ClassicWindow<Content: View>: View {
 struct TitleBar: View {
     let title: String
     let onClose: () -> Void
+    var height: CGFloat = 20
+    var fontSize: CGFloat = 13
+    /// Shows a zoom box on the right (switches between the full and mini timer).
+    var onZoom: (() -> Void)? = nil
 
     var body: some View {
+        let box = height - 7
         ZStack {
             Canvas { ctx, size in
                 var y: CGFloat = 4
-                while y < 16 {
+                while y < size.height - 4 {
                     ctx.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)), with: .color(.black))
                     y += 2
                 }
@@ -84,22 +92,94 @@ struct TitleBar: View {
                     Rectangle()
                         .strokeBorder(Theme.ink, lineWidth: 1)
                         .background(Theme.paper)
-                        .frame(width: 13, height: 13)
+                        .frame(width: box, height: box)
                 }
                 .buttonStyle(.plain)
                 .padding(2)
                 .background(Theme.paper)
                 .help("close")
                 Spacer()
+                if let onZoom {
+                    Button(action: onZoom) {
+                        ZoomGlyph().frame(width: box, height: box)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(2)
+                    .background(Theme.paper)
+                    .help("switch size")
+                }
             }
             .padding(.horizontal, 6)
             Text(title)
-                .font(Theme.font(13, bold: true))
-                .padding(.horizontal, 8)
+                .font(Theme.font(fontSize, bold: true))
+                .padding(.horizontal, 7)
                 .background(Theme.paper)
         }
-        .frame(height: 20)
+        .frame(height: height)
         .overlay(alignment: .bottom) { Rule() }
+    }
+}
+
+/// The classic zoom box: a square with a smaller square in its corner.
+struct ZoomGlyph: View {
+    var body: some View {
+        GeometryReader { g in
+            let s = g.size.width
+            ZStack(alignment: .topLeading) {
+                Rectangle().strokeBorder(Theme.ink, lineWidth: 1).background(Theme.paper)
+                Rectangle().strokeBorder(Theme.ink, lineWidth: 1).frame(width: s * 0.55, height: s * 0.55)
+            }
+        }
+    }
+}
+
+/// Pause bars while running, a play triangle otherwise.
+struct PlayPauseGlyph: View {
+    let running: Bool
+
+    var body: some View {
+        Canvas { ctx, size in
+            if running {
+                ctx.fill(Path(CGRect(x: 1, y: 0, width: 3, height: size.height)), with: .foreground)
+                ctx.fill(Path(CGRect(x: size.width - 4, y: 0, width: 3, height: size.height)), with: .foreground)
+            } else {
+                var p = Path()
+                p.move(to: CGPoint(x: 1, y: 0))
+                p.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+                p.addLine(to: CGPoint(x: 1, y: size.height))
+                p.closeSubpath()
+                ctx.fill(p, with: .foreground)
+            }
+        }
+        .frame(width: 9, height: 10)
+    }
+}
+
+/// Two or more options in one bordered strip; the chosen one is inverted.
+struct ClassicSegmented: View {
+    let options: [String]
+    @Binding var selection: String
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(options, id: \.self) { option in
+                let on = selection == option
+                Button { selection = option } label: {
+                    Text(option)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 3)
+                        .foregroundStyle(on ? Theme.paper : Theme.ink)
+                        .background(on ? Theme.ink : Theme.paper)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .overlay(alignment: .leading) {
+                    if option != options.first { Rectangle().fill(Theme.ink).frame(width: 1) }
+                }
+            }
+        }
+        .fixedSize()
+        .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 1))
     }
 }
 
@@ -302,6 +382,8 @@ final class WindowOpener {
 /// Strips the system window chrome so ClassicWindow can draw its own.
 struct WindowAccessor: NSViewRepresentable {
     var floats = false
+    /// Always on top and on every desktop, whatever the setting (the mini timer).
+    var pinned = false
     @AppStorage(Prefs.Key.alwaysOnTop) private var onTop = false
 
     func makeNSView(context: Context) -> NSView {
@@ -328,6 +410,11 @@ struct WindowAccessor: NSViewRepresentable {
         window.backgroundColor = .clear
         window.hasShadow = false
         window.isMovableByWindowBackground = true
-        if floats { window.level = onTop ? .floating : .normal }
+        if pinned {
+            window.level = .floating
+            window.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
+        } else if floats {
+            window.level = onTop ? .floating : .normal
+        }
     }
 }

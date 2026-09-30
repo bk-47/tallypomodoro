@@ -6,19 +6,8 @@ import AppKit
 struct MenuBarLabel: View {
     @ObservedObject private var engine = TimerEngine.shared
     @AppStorage(Prefs.Key.menuSeconds) private var showSeconds = true
-    @AppStorage(Prefs.Key.redMenuBar) private var redMenuBar = false
+    @AppStorage(Prefs.Key.menuStyle) private var style = MenuStyle.plain.rawValue
     @Environment(\.openWindow) private var openWindow
-
-    /// Red only while a work block is running, and only if switched on in settings.
-    private var isRed: Bool {
-        redMenuBar && engine.state == .running && engine.phase == .work
-    }
-
-    /// A slightly brighter red on a dark menu bar so it doesn't go muddy.
-    private var red: Color {
-        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return dark ? Color(red: 1.0, green: 0.39, blue: 0.35) : Color(red: 0.84, green: 0.25, blue: 0.23)
-    }
 
     var body: some View {
         Image(nsImage: rendered)
@@ -28,7 +17,11 @@ struct MenuBarLabel: View {
     private var text: String {
         switch engine.state {
         case .idle: return ""
-        case .finished: return "done"
+        case .finished:
+            if engine.isInOvertime {
+                return showSeconds ? "+" + Fmt.timer(engine.overtime) : "+\(engine.overtime / 60)m"
+            }
+            return "done"
         default:
             if showSeconds { return Fmt.timer(engine.remaining) }
             return "\(Int((Double(engine.remaining) / 60).rounded(.up)))m"
@@ -40,18 +33,71 @@ struct MenuBarLabel: View {
             MenuGlyph(state: engine.state, phase: engine.phase)
                 .frame(width: 9, height: 9)
             if !text.isEmpty {
-                Text(text).font(Theme.font(14))
+                MenuTime(text: text, style: MenuStyle(rawValue: style) ?? .plain)
             }
         }
-        .foregroundStyle(isRed ? red : Color.black)
-        .frame(height: 16)
+        .foregroundStyle(Color.black)
+        .frame(height: 18)
 
         let renderer = ImageRenderer(content: content)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         let image = renderer.nsImage ?? NSImage(size: NSSize(width: 16, height: 16))
-        // Template images are recoloured black or white by macOS; the red one has to keep its colour.
-        image.isTemplate = !isRed
+        // A template image: macOS draws it black on a light menu bar and white on a dark one.
+        image.isTemplate = true
         return image
+    }
+}
+
+enum MenuStyle: String, CaseIterable {
+    case plain, outline, shadow, solid
+
+    var title: String {
+        switch self {
+        case .plain: return "plain"
+        case .outline: return "outline"
+        case .shadow: return "shadow"
+        case .solid: return "solid"
+        }
+    }
+}
+
+/// The time in the menu bar, plain or in a box. Everything is drawn in one colour with
+/// cut-outs (not white), so macOS can flip it for a dark menu bar.
+struct MenuTime: View {
+    let text: String
+    let style: MenuStyle
+
+    var body: some View {
+        let label = Text(text).font(Theme.font(13)).padding(.horizontal, 4)
+        switch style {
+        case .plain:
+            Text(text).font(Theme.font(14))
+        case .outline:
+            label
+                .frame(height: 16)
+                .overlay(Rectangle().strokeBorder(Color.black, lineWidth: 1))
+        case .shadow:
+            label
+                .frame(height: 15)
+                .background {
+                    ZStack {
+                        Rectangle().fill(Color.black).offset(x: 2, y: 2)
+                        Rectangle().fill(Color.black).blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+                }
+                .overlay(Rectangle().strokeBorder(Color.black, lineWidth: 1))
+                .padding(.trailing, 2)
+                .padding(.bottom, 2)
+        case .solid:
+            ZStack {
+                Rectangle().fill(Color.black)
+                label.blendMode(.destinationOut)
+            }
+            .compositingGroup()
+            .fixedSize(horizontal: false, vertical: false)
+            .frame(height: 16)
+        }
     }
 }
 
@@ -115,6 +161,7 @@ struct MenuContent: View {
                 MenuInfo(text: "today: \(store.todayPomodoros) done, \(store.todayMinutes.hoursMinutes)")
                 MenuDivider()
                 MenuRow(title: "show timer", detail: "⌘1") { show("timer") }
+                MenuRow(title: "mini timer", detail: "⌘3") { show("mini") }
                 MenuRow(title: "stats", detail: "⌘2") { show("stats") }
                 MenuRow(title: "settings…", detail: "⌘,") { show("settings") }
                 MenuDivider()

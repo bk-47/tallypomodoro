@@ -724,6 +724,7 @@ struct LabelTotals: View {
     private func detail(_ e: LogEntry) -> String {
         var s = "\(Int(e.minutes.rounded()))m"
         if e.addedMinutes > 0 { s += ", +\(e.addedMinutes)" }
+        if let over = e.overtimeMinutes, over > 0 { s += ", \(over)m over" }
         if !e.completed { s += ", stopped early" }
         return s
     }
@@ -781,6 +782,7 @@ struct LogList: View {
             Spacer()
             if e.phase == .work && !e.completed { Text("stopped early") }
             if e.addedMinutes > 0 { Text("+\(e.addedMinutes)") }
+            if let over = e.overtimeMinutes, over > 0 { Text("\(over)m over") }
             Text("\(Int(e.minutes.rounded())) min")
                 .frame(width: 70, alignment: .trailing)
         }

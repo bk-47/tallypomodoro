@@ -7,9 +7,10 @@ struct TimerView: View {
     @AppStorage(Prefs.Key.longEvery) private var longEvery = 4
     @AppStorage(Prefs.Key.extend) private var extendBy = 5
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
-        ClassicWindow(title: "tally", id: "timer") {
+        ClassicWindow(title: "tally", id: "timer", content: {
             VStack(spacing: 18) {
                 Text(engine.statusTitle)
                 dial
@@ -21,7 +22,10 @@ struct TimerView: View {
             .padding(.horizontal, 22)
             .padding(.top, 20)
             .padding(.bottom, 12)
-        }
+        }, onZoom: {
+            openWindow(id: "mini")
+            dismissWindow(id: "timer")
+        })
         .frame(width: 308)
         .background(WindowAccessor(floats: true))
         .onAppear { WindowOpener.shared.register(openWindow) }
@@ -57,7 +61,7 @@ struct TimerView: View {
                     .frame(width: 192, height: 192)
             }
             VStack(spacing: 14) {
-                Text(Fmt.timer(engine.remaining))
+                Text(engine.clockText)
                     .font(Theme.font(52))
                     .kerning(-1)
                     .foregroundStyle(engine.state == .paused ? Theme.muted : Theme.ink)

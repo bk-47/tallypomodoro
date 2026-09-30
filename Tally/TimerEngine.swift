@@ -15,6 +15,10 @@ final class TimerEngine: ObservableObject {
     @Published private(set) var remaining = 0
     @Published private(set) var planned = 0
     @Published private(set) var cycleCount = 0
+    /// Seconds worked past the end of a work block, while it waits for you to respond.
+    @Published private(set) var overtime = 0
+    /// True once overtime has stopped counting (5 min without keyboard or mouse, or the Mac slept).
+    @Published private(set) var overtimeStopped = false
     @Published var label: String = UserDefaults.standard.string(forKey: "lastLabel") ?? "" {
         didSet { UserDefaults.standard.set(label, forKey: "lastLabel") }
     }
@@ -26,8 +30,16 @@ final class TimerEngine: ObservableObject {
     private var lastResume: Date?
     private var activeTime: TimeInterval = 0
     private var finishedAt: Date?
+    /// Overtime already folded into the block by a +5, so the log can show it.
+    private var overtimeMinutesCarried = 0
     private var ticker: Timer?
     private var prefsObserver: AnyCancellable?
+    private var sleepObserver: AnyCancellable?
+    /// When overtime stopped counting, if it has.
+    private var overtimeEnd: Date?
+    private var overtimeCounting = false
+    /// Minutes of no keyboard or mouse before overtime stops counting.
+    private let awayLimit: TimeInterval = 5 * 60
 
     private init() {
         resetIdleDisplay()
@@ -38,6 +50,11 @@ final class TimerEngine: ObservableObject {
                     guard let self, self.state == .idle else { return }
                     self.resetIdleDisplay()
                 }
+            }
+        sleepObserver = NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.willSleepNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.stopOvertime(at: Date()) }
             }
     }
 
@@ -58,7 +75,12 @@ final class TimerEngine: ObservableObject {
         case .idle: return "\(phase.title), \(planned / 60) min"
         case .running: return addedMinutes > 0 ? "\(phase.title) (+\(addedMinutes) min)" : phase.title
         case .paused: return "Paused"
-        case .finished: return phase == .work ? "Block done" : "Break over"
+        case .finished:
+            if phase != .work { return "Break over" }
+            if overtimeCounting && overtime >= 60 {
+                return overtimeStopped ? "Block done, +\(overtime / 60) min over (stopped)" : "Block done, +\(overtime / 60) min over"
+            }
+            return "Block done"
         }
     }
 
@@ -94,8 +116,20 @@ final class TimerEngine: ObservableObject {
     var blockMinutes: Int {
         var t = activeTime
         if state == .running, let resumed = lastResume { t += Date().timeIntervalSince(resumed) }
+        if state == .finished { t += TimeInterval(overtime) }
         return Int((t / 60).rounded())
     }
+
+    /// The big readout: the countdown, or "+04:12" while a finished block keeps counting.
+    var clockText: String {
+        if state == .finished && overtimeCounting { return "+" + Fmt.timer(overtime) }
+        return Fmt.timer(remaining)
+    }
+
+    /// Minutes planned for the block, before any overtime.
+    var plannedMinutes: Int { planned / 60 }
+
+    var isInOvertime: Bool { state == .finished && overtimeCounting }
 
     /// The break that follows the current work block.
     var nextBreak: Phase {
@@ -171,7 +205,13 @@ final class TimerEngine: ObservableObject {
         case .paused:
             pausedRemaining += secs
         case .finished:
+            tick()
             let now = Date()
+            // Time already worked past the end counts, then the extra minutes start now.
+            activeTime += TimeInterval(overtime)
+            overtimeMinutesCarried += overtime / 60
+            planned += overtime
+            resetOvertime()
             endDate = now.addingTimeInterval(secs)
             lastResume = now
             finishedAt = nil
@@ -293,8 +333,12 @@ final class TimerEngine: ObservableObject {
         guard let start = blockStart else { return }
         let now = Date()
         let end: Date
+        var overMinutes = overtimeMinutesCarried
         if state == .finished, let f = finishedAt {
-            end = f
+            tick()
+            activeTime += TimeInterval(overtime)
+            overMinutes += overtime / 60
+            end = f.addingTimeInterval(TimeInterval(overtime))
         } else {
             if state == .running, let resumed = lastResume {
                 activeTime += now.timeIntervalSince(resumed)
@@ -311,9 +355,12 @@ final class TimerEngine: ObservableObject {
                 end: end,
                 seconds: secs,
                 completed: completed,
-                addedMinutes: addedMinutes
+                addedMinutes: addedMinutes,
+                overtimeMinutes: overMinutes > 0 ? overMinutes : nil
             ))
         }
+        resetOvertime()
+        overtimeMinutesCarried = 0
         blockStart = nil
         lastResume = nil
         endDate = nil
@@ -329,8 +376,17 @@ final class TimerEngine: ObservableObject {
         endDate = nil
         lastResume = nil
         remaining = 0
+        resetOvertime()
         state = .finished
-        stopTicker()
+        if phase == .work && Prefs.keepsCounting {
+            // Keep counting past the end until you respond, go quiet or the Mac sleeps.
+            overtimeCounting = true
+            // Found late (the Mac was asleep through the end): nothing extra to count.
+            if Date().timeIntervalSince(end) > 60 { stopOvertime(at: end) }
+            startTicker()
+        } else {
+            stopTicker()
+        }
         if Prefs.showsPopup {
             PopupController.shared.show()
         } else {
@@ -349,9 +405,38 @@ final class TimerEngine: ObservableObject {
             if secs != remaining { remaining = secs }
         case .paused:
             remaining = Int(pausedRemaining.rounded(.up))
-        default:
+        case .finished:
+            guard overtimeCounting, let f = finishedAt else { return }
+            if overtimeEnd == nil {
+                let away = Self.secondsSinceInput()
+                if away >= awayLimit { stopOvertime(at: Date().addingTimeInterval(-away)) }
+            }
+            let upTo = overtimeEnd ?? Date()
+            let secs = max(0, Int(upTo.timeIntervalSince(f)))
+            if secs != overtime { overtime = secs }
+        case .idle:
             break
         }
+    }
+
+    private func stopOvertime(at date: Date) {
+        guard state == .finished, overtimeCounting, overtimeEnd == nil, let f = finishedAt else { return }
+        overtimeEnd = max(f, date)
+        overtimeStopped = true
+        tick()
+    }
+
+    private func resetOvertime() {
+        overtime = 0
+        overtimeStopped = false
+        overtimeEnd = nil
+        overtimeCounting = false
+    }
+
+    /// Seconds since the last key press, click or mouse move anywhere on the Mac.
+    private static func secondsSinceInput() -> TimeInterval {
+        guard let any = CGEventType(rawValue: ~0) else { return 0 }
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any)
     }
 
     private func startTicker() {

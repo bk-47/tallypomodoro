@@ -99,7 +99,7 @@ struct PopupView: View {
                         .padding(.bottom, 18)
 
                     DottedRule().padding(.horizontal, 22)
-                    Text(isWork ? "return starts the break. esc stops. both save the block."
+                    Text(isWork ? "return saves it and starts the break. esc saves it and stops."
                                 : "return starts work. esc ends for now.")
                         .font(Theme.font(11))
                         .foregroundStyle(Theme.muted)
@@ -129,8 +129,19 @@ struct PopupView: View {
             let what = label.isEmpty ? "this block" : label
             let done = engine.dotsFilled
             let next = engine.nextBreak == .longBreak ? "a long break" : "a short break"
+            let timeLine: String
+            if engine.isInOvertime && engine.overtime >= 60 {
+                let over = engine.overtime / 60
+                timeLine = engine.overtimeStopped
+                    ? "\(what), \(engine.plannedMinutes)m + \(over)m over. stopped counting when you went quiet."
+                    : "\(what), \(engine.plannedMinutes)m + \(over)m over, still counting."
+            } else if engine.isInOvertime {
+                timeLine = "\(what), \(engine.plannedMinutes)m. still counting until you pick one."
+            } else {
+                timeLine = "\(what), \(engine.blockMinutes)m."
+            }
             return [
-                "\(what), \(engine.blockMinutes)m saved.",
+                timeLine,
                 "\(done) of \(longEvery) done. next is \(next), \(engine.nextBreakMinutes) min.",
             ]
         } else {

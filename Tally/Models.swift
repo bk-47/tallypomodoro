@@ -25,6 +25,8 @@ struct LogEntry: Codable, Identifiable, Hashable {
     /// False when the block was stopped before the timer ran out.
     var completed: Bool
     var addedMinutes: Int
+    /// Minutes worked past the end before you responded. Older entries don't have this.
+    var overtimeMinutes: Int? = nil
 
     var minutes: Double { Double(seconds) / 60 }
     var displayLabel: String { label.isEmpty ? "Unlabelled" : label }
@@ -44,7 +46,10 @@ enum Prefs {
         static let includeBreaks = "includeBreaks"
         static let sheetsURL = "sheetsURL"
         static let popup = "showPopup"
-        static let redMenuBar = "redMenuBar"
+        static let menuStyle = "menuStyle"
+        static let keepCounting = "keepCounting"
+        static let sheetLink = "sheetLink"
+        static let miniStyle = "miniStyle"
     }
 
     private static var d: UserDefaults { .standard }
@@ -66,6 +71,7 @@ enum Prefs {
     static var includesBreaks: Bool { bool(Key.includeBreaks, false) }
     static var sheetsURL: String { d.string(forKey: Key.sheetsURL) ?? "" }
     static var showsPopup: Bool { bool(Key.popup, true) }
+    static var keepsCounting: Bool { bool(Key.keepCounting, true) }
 }
 
 extension String {

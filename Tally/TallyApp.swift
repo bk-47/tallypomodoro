@@ -22,8 +22,16 @@ struct TallyApp: App {
             CommandGroup(after: .windowArrangement) {
                 OpenWindowButton(title: "timer", id: "timer", key: "1")
                 OpenWindowButton(title: "stats", id: "stats", key: "2")
+                OpenWindowButton(title: "mini timer", id: "mini", key: "3")
             }
         }
+
+        Window("tally mini", id: "mini") {
+            MiniView()
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultPosition(.topTrailing)
 
         Window("tally stats", id: "stats") {
             StatsView()

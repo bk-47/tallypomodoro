@@ -56,18 +56,58 @@ final class SheetsSync: ObservableObject {
         flush()
     }
 
+    /// Link to the sheet itself, learned from a successful test.
+    @Published private(set) var sheetLink: URL? =
+        UserDefaults.standard.string(forKey: Prefs.Key.sheetLink).flatMap { URL(string: $0) }
+
+    @Published private(set) var busy = false
+
     func test() {
         guard let url else {
-            status = "That URL doesn't look right. It should start with https://script.google.com/"
+            status = "That URL doesn't look right. It should start with https://script.google.com/ and end in /exec."
             return
         }
         status = "Testing."
+        busy = true
         let req = request(url, body: ["test": true])
         Task {
-            let ok = await send(req)
-            status = ok
-                ? "Connected. Finished blocks will be added to the sheet."
-                : "Couldn't connect. Check the URL, and that the web app's access is set to Anyone."
+            let reply = await sendForReply(req)
+            busy = false
+            guard let reply, reply["ok"] as? Bool == true else {
+                status = "Couldn't connect. Check the URL, and that the web app's access is set to Anyone."
+                return
+            }
+            if let link = reply["sheet"] as? String, let u = URL(string: link) {
+                sheetLink = u
+                UserDefaults.standard.set(link, forKey: Prefs.Key.sheetLink)
+            }
+            let version = reply["version"] as? Int ?? 1
+            if version < SheetsSetup.scriptVersion {
+                status = "Connected, but the script in the sheet is an older version. Copy the new one, paste it over the old, and redeploy as a new version."
+            } else {
+                status = "Connected. Finished blocks will be added to the sheet, and the dashboard builds itself with the first one."
+                flush()
+            }
+        }
+    }
+
+    /// Asks the script to (re)build the dashboard tab.
+    func buildDashboard() {
+        guard let url else { status = "Add the web app URL first."; return }
+        status = "Building the dashboard. This can take half a minute."
+        busy = true
+        var req = request(url, body: ["action": "dashboard"])
+        req.timeoutInterval = 120
+        Task {
+            let reply = await sendForReply(req)
+            busy = false
+            if reply?["dashboard"] as? Bool == true {
+                status = "Dashboard built. Open the sheet to see it."
+            } else if reply?["ok"] as? Bool == true {
+                status = "The script in the sheet is an older version. Copy the new one, paste it over the old, and redeploy as a new version."
+            } else {
+                status = "Couldn't build it. Check the connection with test."
+            }
         }
     }
 
@@ -110,8 +150,19 @@ final class SheetsSync: ObservableObject {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        req.timeoutInterval = 30
+        // Generous: the first rows in a new sheet also build the dashboard.
+        req.timeoutInterval = 90
         return req
+    }
+
+    private func sendForReply(_ req: URLRequest) async -> [String: Any]? {
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, http.statusCode < 400 else { return nil }
+            return try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        } catch {
+            return nil
+        }
     }
 
     private func send(_ req: URLRequest) async -> Bool {
